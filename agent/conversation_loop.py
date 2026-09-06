@@ -678,6 +678,41 @@ def run_conversation(
         except Exception:
             pass
 
+    # ── Pre-chat hook: CC auto-trigger ──
+    # Fire the pre_chat hook to allow plugins (like CC trigger) to intercept
+    # and potentially reroute the query before normal processing.
+    _cc_trigger_result = None
+    try:
+        from hermes_cli.plugins import has_hook, invoke_hook
+        logger.info("CC Trigger: Checking for pre_chat hook...")
+        if has_hook("pre_chat"):
+            logger.info("CC Trigger: pre_chat hook found, analyzing query...")
+            _cc_trigger_result = invoke_hook(
+                "pre_chat",
+                query=user_message,
+                context=None,
+            )
+            logger.info(f"CC Trigger: Hook result = {_cc_trigger_result}")
+            # If plugin returns trigger_cc action, run CC immediately
+            if isinstance(_cc_trigger_result, dict) and _cc_trigger_result.get("trigger_cc"):
+                logger.info(f"CC Trigger: Triggering CC with councils: {_cc_trigger_result.get('recommended_councils', [])}")
+                from councils.executor.cc import run_cc as run_cc_executor
+                councils = _cc_trigger_result.get("recommended_councils", [])
+                cc_result = run_cc_executor(user_message, councils=councils)
+                logger.info(f"CC Trigger: CC completed, meta_synthesis length = {len(str(cc_result.get('meta_synthesis', '')))}")
+                # Return CC result immediately, bypassing normal agent flow
+                return {
+                    "final_response": cc_result.get("meta_synthesis", str(cc_result)),
+                    "cc_triggered": True,
+                    "cc_result": cc_result,
+                    "trigger_info": _cc_trigger_result,
+                }
+        else:
+            logger.info("CC Trigger: No pre_chat hook registered")
+    except Exception as exc:
+        logger.warning(f"CC Trigger: pre_chat hook failed: {exc}", exc_info=True)
+        # Fail open - continue with normal processing
+
     # ── Per-turn setup (the prologue) ──
     # All once-per-turn setup — stdio guarding, retry-counter resets, user
     # message sanitization, todo/nudge hydration, system-prompt restore-or-

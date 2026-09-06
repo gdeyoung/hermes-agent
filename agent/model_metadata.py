@@ -1828,14 +1828,20 @@ def _query_local_context_length_uncached(model: str, base_url: str, api_key: str
                                     return int(ctx)
                             break
 
-            # LM Studio / vLLM / llama.cpp: try /v1/models/{model}
-            resp = client.get(f"{server_url}/v1/models/{model}")
-            if resp.status_code == 200:
-                data = resp.json()
-                # vLLM returns max_model_len
-                ctx = data.get("max_model_len") or data.get("context_length") or data.get("max_tokens")
-                if ctx and isinstance(ctx, (int, float)):
-                    return int(ctx)
+            # LM Studio / vLLM / llama.cpp: try /v1/models/{model}.
+            # Only probe when the server was positively identified as one of
+            # those. On OpenAI-compatible proxies (LiteLLM et al.) this path
+            # collides with the admin-only "model info" route
+            # (/v1/models/<name>) and returns 401 + a full auth traceback in
+            # the proxy log on every probe — pure noise at both ends.
+            if server_type in ("lm-studio", "vllm", "llamacpp"):
+                resp = client.get(f"{server_url}/v1/models/{model}")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    # vLLM returns max_model_len
+                    ctx = data.get("max_model_len") or data.get("context_length") or data.get("max_tokens")
+                    if ctx and isinstance(ctx, (int, float)):
+                        return int(ctx)
 
             # Try /v1/models and find the model in the list.
             # Use _model_id_matches to handle "publisher/slug" vs bare "slug".

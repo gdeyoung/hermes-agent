@@ -143,6 +143,12 @@ VALID_HOOKS: Set[str] = {
     "transform_llm_output",
     "pre_llm_call",
     "post_llm_call",
+    # Pre-chat hook - fired when user sends a message, before agent processing.
+    # Plugins may return a dict to influence flow:
+    #   {"action": "trigger_cc", "reason": "...", "recommended_councils": [...]} -> trigger CC
+    #   {"action": "allow"} / None -> normal dispatch
+    # Kwargs: query: str, context: Optional[Dict]
+    "pre_chat",
     # Verification-loop gate. Fired once per turn when the agent has edited code
     # and is about to verify/finish (after the verify-on-stop guard). A callback
     # may keep the agent going — run a check, defer it, tidy the diff — instead

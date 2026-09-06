@@ -722,6 +722,51 @@ def web_search_tool(query: str, limit: int = 5) -> str:
             )
             response_data = provider.search(query, limit)
 
+            # --- Failover chain (fleet hardening 2026-08-20) -----------------
+            # A provider returning success with ZERO results is a silent
+            # failure (observed live: SearXNG healthz green, every engine
+            # CAPTCHA-suspended, queries returned success+empty for days).
+            # Roll over to the next available provider instead of handing
+            # the agent an empty page and calling it a day.
+            _web = (response_data or {}).get("data", {}).get("web") or []
+            _failed = (not (response_data or {}).get("success")) or not _web
+            if _failed and provider.name != "ddgs":
+                from agent.web_search_registry import list_providers
+                _order = [p for p in list_providers()
+                          if p.name != provider.name and p.supports_search()]
+                # deterministic, quality-ordered hop order
+                _prio = {"brave-free": 0, "ddgs": 1, "searxng": 2, "tavily": 3,
+                         "exa": 4, "parallel": 5, "firecrawl": 6}
+                _order.sort(key=lambda p: _prio.get(p.name, 9))
+                for fb in _order:
+                    try:
+                        if not fb.is_available():
+                            continue
+                    except Exception:
+                        continue
+                    _detail = ""
+                    if (response_data or {}).get("error"):
+                        _detail = f" ({response_data['error'][:120]})"
+                    logger.warning(
+                        "web_search failover: %s %s— trying %s",
+                        provider.name,
+                        "returned 0 results" if _web == [] else "failed",
+                        fb.name,
+                    )
+                    try:
+                        response_data = fb.search(query, limit)
+                    except Exception as exc:
+                        logger.warning("failover hop %s raised %s", fb.name, exc)
+                        continue
+                    _web2 = (response_data or {}).get("data", {}).get("web") or []
+                    if (response_data or {}).get("success") and _web2:
+                        logger.info(
+                            "web_search failover: %s rescued the query",
+                            fb.name,
+                        )
+                        break
+            # --- end failover chain --------------------------------------------
+
         debug_call_data["results_count"] = len(response_data.get("data", {}).get("web", []))
         result_json = json.dumps(response_data, indent=2, ensure_ascii=False)
         debug_call_data["final_response_size"] = len(result_json)
